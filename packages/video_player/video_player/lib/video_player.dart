@@ -659,9 +659,26 @@ class _VideoPlayerState extends State<VideoPlayer> {
 
   @override
   Widget build(BuildContext context) {
-    return _textureId == VideoPlayerController.kUninitializedTextureId
-        ? Container()
-        : _videoPlayerPlatform.buildView(_textureId);
+    // This is used in the platform side to register the view.
+    final String viewType = '<native-video-platform-view>';
+    final Map<String, dynamic> creationParams = <String, dynamic>{};
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.iOS: {
+        return IgnorePointer(     // Note: IgnorePointer so GestureDetector can be used above the PlatformView
+          ignoring: true,
+          child: UiKitView(
+            viewType: viewType,
+            creationParams: creationParams,
+            creationParamsCodec: const StandardMessageCodec(),
+          )
+        );
+      }
+      default: {
+        return _textureId == VideoPlayerController.kUninitializedTextureId
+            ? Container()
+            : _videoPlayerPlatform.buildView(_textureId);
+      }
+    }
   }
 }
 

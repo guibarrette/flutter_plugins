@@ -313,7 +313,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   } else {
     [_player pause];
   }
-  _displayLink.paused = !_isPlaying;
+  // _displayLink.paused = !_isPlaying;   // disabled since I'm using PlatformView
 }
 
 - (void)sendInitialized {
@@ -459,17 +459,64 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 @end
 
+
+
+@interface PlayerView : UIView
+@property (nonatomic) AVPlayer *player;
+@end
+
+@implementation PlayerView
++ (Class)layerClass {
+    return [AVPlayerLayer class];
+}
+- (AVPlayer*)player {
+    return [(AVPlayerLayer *)[self layer] player];
+}
+- (void)setPlayer:(AVPlayer *)player {
+    [(AVPlayerLayer *)[self layer] setPlayer:player];
+}
+@end
+
+@interface FLNativeVideoView ()
+@end
+
+@implementation FLNativeVideoView {
+   PlayerView *_view;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame
+               viewIdentifier:(int64_t)viewId
+                    arguments:(id _Nullable)args
+              binaryMessenger:(NSObject<FlutterBinaryMessenger>*)messenger {
+  if (self = [super init]) {
+    _view = [[PlayerView alloc] init];
+  }
+  return self;
+}
+
+- (PlayerView*)view {
+  return _view;
+}
+
+- (void)setPlayerLayer:(AVPlayer*)player {
+  [_view setPlayer:player];
+}
+
+@end
+
 @interface FLTVideoPlayerPlugin () <FLTVideoPlayerApi>
 @property(readonly, weak, nonatomic) NSObject<FlutterTextureRegistry>* registry;
 @property(readonly, weak, nonatomic) NSObject<FlutterBinaryMessenger>* messenger;
 @property(readonly, strong, nonatomic) NSMutableDictionary* players;
+@property(nonatomic) int64_t textureId;
+@property(nonatomic) FLNativeVideoView* videoView;
 @property(readonly, strong, nonatomic) NSObject<FlutterPluginRegistrar>* registrar;
 @end
 
 @implementation FLTVideoPlayerPlugin
 + (void)registerWithRegistrar:(NSObject<FlutterPluginRegistrar>*)registrar {
   FLTVideoPlayerPlugin* instance = [[FLTVideoPlayerPlugin alloc] initWithRegistrar:registrar];
-  [registrar publish:instance];
+  [registrar registerViewFactory:instance withId:@"<native-video-platform-view>"];
   FLTVideoPlayerApiSetup(registrar.messenger, instance);
 }
 
@@ -495,6 +542,26 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   // FLTVideoPlayerApiSetup(registrar.messenger, nil);
 }
 
+- (instancetype)initWithMessenger:(NSObject<FlutterBinaryMessenger>*)messenger {
+  self = [super init];
+  if (self) {
+    _messenger = messenger;
+  }
+  return self;
+}
+
+- (NSObject<FlutterPlatformView>*)createWithFrame:(CGRect)frame
+                                   viewIdentifier:(int64_t)viewId
+                                        arguments:(id _Nullable)args {
+  _videoView = [[FLNativeVideoView alloc] initWithFrame:frame
+                              viewIdentifier:viewId
+                                   arguments:args
+                             binaryMessenger:_messenger];
+  FLTVideoPlayer* player = _players[@(_textureId)];
+  [_videoView setPlayerLayer:player.player];
+  return _videoView;
+}
+
 - (FLTTextureMessage*)onPlayerSetup:(FLTVideoPlayer*)player
                        frameUpdater:(FLTFrameUpdater*)frameUpdater {
   int64_t textureId = [_registry registerTexture:player];
@@ -508,6 +575,8 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   _players[@(textureId)] = player;
   FLTTextureMessage* result = [[FLTTextureMessage alloc] init];
   result.textureId = @(textureId);
+  _textureId = textureId;
+  [_videoView setPlayerLayer:player.player];
   return result;
 }
 

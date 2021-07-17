@@ -4,5 +4,15 @@
 
 #import <Flutter/Flutter.h>
 
-@interface FLTVideoPlayerPlugin : NSObject <FlutterPlugin>
+@interface FLTVideoPlayerPlugin : NSObject <FlutterPlatformViewFactory, FlutterPlugin>
+- (instancetype)initWithMessenger:(NSObject<FlutterBinaryMessenger>*)messenger;
+@end
+
+@interface FLNativeVideoView : NSObject <FlutterPlatformView>
+
+- (instancetype)initWithFrame:(CGRect)frame
+               viewIdentifier:(int64_t)viewId
+                    arguments:(id _Nullable)args
+              binaryMessenger:(NSObject<FlutterBinaryMessenger>*)messenger;
+- (UIView*)view;
 @end
