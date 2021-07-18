@@ -11,29 +11,8 @@
 #error Code Requires ARC.
 #endif
 
-@interface FLTFrameUpdater : NSObject
-@property(nonatomic) int64_t textureId;
-@property(nonatomic, weak, readonly) NSObject<FlutterTextureRegistry>* registry;
-- (void)onDisplayLink:(CADisplayLink*)link;
-@end
-
-@implementation FLTFrameUpdater
-- (FLTFrameUpdater*)initWithRegistry:(NSObject<FlutterTextureRegistry>*)registry {
-  NSAssert(self, @"super init cannot be nil");
-  if (self == nil) return nil;
-  _registry = registry;
-  return self;
-}
-
-- (void)onDisplayLink:(CADisplayLink*)link {
-  [_registry textureFrameAvailable:_textureId];
-}
-@end
-
-@interface FLTVideoPlayer : NSObject <FlutterTexture, FlutterStreamHandler>
+@interface FLTVideoPlayer : NSObject <FlutterStreamHandler>
 @property(readonly, nonatomic) AVPlayer* player;
-@property(readonly, nonatomic) AVPlayerItemVideoOutput* videoOutput;
-@property(readonly, nonatomic) CADisplayLink* displayLink;
 @property(nonatomic) FlutterEventChannel* eventChannel;
 @property(nonatomic) FlutterEventSink eventSink;
 @property(nonatomic) CGAffineTransform preferredTransform;
@@ -42,7 +21,6 @@
 @property(nonatomic) bool isLooping;
 @property(nonatomic, readonly) bool isInitialized;
 - (instancetype)initWithURL:(NSURL*)url
-               frameUpdater:(FLTFrameUpdater*)frameUpdater
                 httpHeaders:(NSDictionary<NSString*, NSString*>*)headers;
 - (void)play;
 - (void)pause;
@@ -57,9 +35,9 @@ static void* playbackBufferEmptyContext = &playbackBufferEmptyContext;
 static void* playbackBufferFullContext = &playbackBufferFullContext;
 
 @implementation FLTVideoPlayer
-- (instancetype)initWithAsset:(NSString*)asset frameUpdater:(FLTFrameUpdater*)frameUpdater {
+- (instancetype)initWithAsset:(NSString*)asset {
   NSString* path = [[NSBundle mainBundle] pathForResource:asset ofType:nil];
-  return [self initWithURL:[NSURL fileURLWithPath:path] frameUpdater:frameUpdater httpHeaders:nil];
+  return [self initWithURL:[NSURL fileURLWithPath:path] httpHeaders:nil];
 }
 
 - (void)addObservers:(AVPlayerItem*)item {
@@ -156,21 +134,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   return videoComposition;
 }
 
-- (void)createVideoOutputAndDisplayLink:(FLTFrameUpdater*)frameUpdater {
-  NSDictionary* pixBuffAttributes = @{
-    (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
-    (id)kCVPixelBufferIOSurfacePropertiesKey : @{}
-  };
-  _videoOutput = [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:pixBuffAttributes];
-
-  _displayLink = [CADisplayLink displayLinkWithTarget:frameUpdater
-                                             selector:@selector(onDisplayLink:)];
-  [_displayLink addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
-  _displayLink.paused = YES;
-}
-
 - (instancetype)initWithURL:(NSURL*)url
-               frameUpdater:(FLTFrameUpdater*)frameUpdater
                 httpHeaders:(NSDictionary<NSString*, NSString*>*)headers {
   NSDictionary<NSString*, id>* options = nil;
   if (headers != nil && [headers count] != 0) {
@@ -178,7 +142,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   }
   AVURLAsset* urlAsset = [AVURLAsset URLAssetWithURL:url options:options];
   AVPlayerItem* item = [AVPlayerItem playerItemWithAsset:urlAsset];
-  return [self initWithPlayerItem:item frameUpdater:frameUpdater];
+  return [self initWithPlayerItem:item];
 }
 
 - (CGAffineTransform)fixTransform:(AVAssetTrack*)videoTrack {
@@ -204,7 +168,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   return transform;
 }
 
-- (instancetype)initWithPlayerItem:(AVPlayerItem*)item frameUpdater:(FLTFrameUpdater*)frameUpdater {
+- (instancetype)initWithPlayerItem:(AVPlayerItem*)item {
   self = [super init];
   NSAssert(self, @"super init cannot be nil");
   _isInitialized = false;
@@ -243,8 +207,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   _player = [AVPlayer playerWithPlayerItem:item];
   _player.actionAtItemEnd = AVPlayerActionAtItemEndNone;
 
-  [self createVideoOutputAndDisplayLink:frameUpdater];
-
   [self addObservers:item];
 
   [asset loadValuesAsynchronouslyForKeys:@[ @"tracks" ] completionHandler:assetCompletionHandler];
@@ -281,7 +243,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
       case AVPlayerItemStatusUnknown:
         break;
       case AVPlayerItemStatusReadyToPlay:
-        [item addOutput:_videoOutput];
         [self sendInitialized];
         [self updatePlayingState];
         break;
@@ -313,7 +274,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   } else {
     [_player pause];
   }
-  // _displayLink.paused = !_isPlaying;   // disabled since I'm using PlatformView
 }
 
 - (void)sendInitialized {
@@ -397,21 +357,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   _player.rate = speed;
 }
 
-- (CVPixelBufferRef)copyPixelBuffer {
-  CMTime outputItemTime = [_videoOutput itemTimeForHostTime:CACurrentMediaTime()];
-  if ([_videoOutput hasNewPixelBufferForItemTime:outputItemTime]) {
-    return [_videoOutput copyPixelBufferForItemTime:outputItemTime itemTimeForDisplay:NULL];
-  } else {
-    return NULL;
-  }
-}
-
-- (void)onTextureUnregistered:(NSObject<FlutterTexture>*)texture {
-  dispatch_async(dispatch_get_main_queue(), ^{
-    [self dispose];
-  });
-}
-
 - (FlutterError* _Nullable)onCancelWithArguments:(id _Nullable)arguments {
   _eventSink = nil;
   return nil;
@@ -434,7 +379,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 /// so the channel is going to die or is already dead.
 - (void)disposeSansEventChannel {
   _disposed = true;
-  [_displayLink invalidate];
   [[_player currentItem] removeObserver:self forKeyPath:@"status" context:statusContext];
   [[_player currentItem] removeObserver:self
                              forKeyPath:@"loadedTimeRanges"
@@ -505,7 +449,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 @end
 
 @interface FLTVideoPlayerPlugin () <FLTVideoPlayerApi>
-@property(readonly, weak, nonatomic) NSObject<FlutterTextureRegistry>* registry;
 @property(readonly, weak, nonatomic) NSObject<FlutterBinaryMessenger>* messenger;
 @property(readonly, strong, nonatomic) NSMutableDictionary* players;
 @property(nonatomic) int64_t textureId;
@@ -523,7 +466,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 - (instancetype)initWithRegistrar:(NSObject<FlutterPluginRegistrar>*)registrar {
   self = [super init];
   NSAssert(self, @"super init cannot be nil");
-  _registry = [registrar textures];
   _messenger = [registrar messenger];
   _registrar = registrar;
   _players = [NSMutableDictionary dictionaryWithCapacity:1];
@@ -562,10 +504,8 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   return _videoView;
 }
 
-- (FLTTextureMessage*)onPlayerSetup:(FLTVideoPlayer*)player
-                       frameUpdater:(FLTFrameUpdater*)frameUpdater {
-  int64_t textureId = [_registry registerTexture:player];
-  frameUpdater.textureId = textureId;
+- (FLTTextureMessage*)onPlayerSetup:(FLTVideoPlayer*)player {
+  int64_t textureId = arc4random();  // Random number to have different value on each instanciation
   FlutterEventChannel* eventChannel = [FlutterEventChannel
       eventChannelWithName:[NSString stringWithFormat:@"flutter.io/videoPlayer/videoEvents%lld",
                                                       textureId]
@@ -585,14 +525,12 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
   [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
 
   for (NSNumber* textureId in _players) {
-    [_registry unregisterTexture:[textureId unsignedIntegerValue]];
     [_players[textureId] dispose];
   }
   [_players removeAllObjects];
 }
 
 - (FLTTextureMessage*)create:(FLTCreateMessage*)input error:(FlutterError**)error {
-  FLTFrameUpdater* frameUpdater = [[FLTFrameUpdater alloc] initWithRegistry:_registry];
   FLTVideoPlayer* player;
   if (input.asset) {
     NSString* assetPath;
@@ -601,13 +539,12 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     } else {
       assetPath = [_registrar lookupKeyForAsset:input.asset];
     }
-    player = [[FLTVideoPlayer alloc] initWithAsset:assetPath frameUpdater:frameUpdater];
-    return [self onPlayerSetup:player frameUpdater:frameUpdater];
+    player = [[FLTVideoPlayer alloc] initWithAsset:assetPath];
+    return [self onPlayerSetup:player];
   } else if (input.uri) {
     player = [[FLTVideoPlayer alloc] initWithURL:[NSURL URLWithString:input.uri]
-                                    frameUpdater:frameUpdater
                                      httpHeaders:input.httpHeaders];
-    return [self onPlayerSetup:player frameUpdater:frameUpdater];
+    return [self onPlayerSetup:player];
   } else {
     *error = [FlutterError errorWithCode:@"video_player" message:@"not implemented" details:nil];
     return nil;
@@ -616,7 +553,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 - (void)dispose:(FLTTextureMessage*)input error:(FlutterError**)error {
   FLTVideoPlayer* player = _players[input.textureId];
-  [_registry unregisterTexture:input.textureId.intValue];
   [_players removeObjectForKey:input.textureId];
   // If the Flutter contains https://github.com/flutter/engine/pull/12695,
   // the `player` is disposed via `onTextureUnregistered` at the right time.
